@@ -1,0 +1,376 @@
+# ============================================================
+# POSTER GRAPHS: POISSON & NEGATIVE BINOMIAL GLM
+# (WITH & WITHOUT OFFSET) — EXACT MLE AIC = 525.82
+# ============================================================
+
+ref_formula = "malaria_cases ~ y5 + y15"
+
+# 1. Poisson GLM without Offset
+pois_ref_no = smf.glm(
+    ref_formula,
+    data=bd_clean,
+    family=sm.families.Poisson()
+).fit()
+
+# 2. Poisson GLM with Population Offset
+pois_ref_off = smf.glm(
+    ref_formula,
+    data=bd_clean,
+    family=sm.families.Poisson(),
+    offset=bd_clean["log_pop"]
+).fit()
+
+# 3. Negative Binomial GLM without Offset (MLE estimated alpha)
+nb_ref_no = smf.negativebinomial(
+    ref_formula,
+    data=bd_clean
+).fit(disp=False)
+
+# 4. Negative Binomial GLM with Population Offset (MLE estimated alpha -> AIC = 525.82)
+nb_ref_off = smf.negativebinomial(
+    ref_formula,
+    data=bd_clean,
+    offset=bd_clean["log_pop"]
+).fit(disp=False)
+
+# ------------------------------------------------------------
+# STORE PREDICTIONS
+# ------------------------------------------------------------
+bd_clean["Pred_Pois_No"] = pois_ref_no.predict(bd_clean)
+bd_clean["Pred_Pois_Off"] = pois_ref_off.predict(bd_clean, offset=bd_clean["log_pop"])
+bd_clean["Pred_NB_No"] = nb_ref_no.predict(bd_clean)
+bd_clean["Pred_NB_Off"] = nb_ref_off.predict(bd_clean, offset=bd_clean["log_pop"])
+
+# ------------------------------------------------------------
+# MODEL COMPARISON USING AIC
+# ------------------------------------------------------------
+model_aics = {
+    "Poisson GLM (Without Offset)": pois_ref_no.aic,
+    "Poisson GLM (With Offset)": pois_ref_off.aic,
+    "Negative Binomial GLM (Without Offset)": nb_ref_no.aic,
+    "Negative Binomial GLM (With Offset)": nb_ref_off.aic
+}
+
+print("MODEL AIC COMPARISON:")
+for name, aic in model_aics.items():
+    print(f"{name}: {aic:.2f}")
+
+# ------------------------------------------------------------
+# GRAPH 4: 2x2 GRID OF OBSERVED VS PREDICTED
+# ------------------------------------------------------------
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["font.sans-serif"] = ["Arial"]
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True, sharey=True)
+
+models_info = [
+    (axes[0, 0], "Pred_Pois_No",
+     f"1. Poisson GLM (Without Offset)\nAIC = {pois_ref_no.aic:,.2f}",
+     "#ff7f0e", "s"),
+
+    (axes[0, 1], "Pred_Pois_Off",
+     f"2. Poisson GLM (With Offset)\nAIC = {pois_ref_off.aic:,.2f}",
+     "#9467bd", "^"),
+
+    (axes[1, 0], "Pred_NB_No",
+     f"3. Negative Binomial GLM (Without Offset)\nAIC = {nb_ref_no.aic:,.2f}",
+     "#d62728", "D"),
+
+    (axes[1, 1], "Pred_NB_Off",
+     f"4. Negative Binomial GLM (With Offset)\nAIC = {nb_ref_off.aic:,.2f}",
+     "#2ca02c", "o")
+]
+
+for ax, col, title, clr, mrk in models_info:
+    ax.plot(
+        bd_clean["Year"],
+        bd_clean["malaria_cases"],
+        marker="o",
+        linewidth=2,
+        color="#1f77b4",
+        label="Observed Cases"
+    )
+    ax.plot(
+        bd_clean["Year"],
+        bd_clean[col],
+        marker=mrk,
+        linestyle="--",
+        linewidth=2,
+        color=clr,
+        label="Predicted Cases"
+    )
+    ax.set_title(title, fontsize=11, fontweight="bold", fontname="Arial")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=9.5, loc="upper right")
+
+axes[1, 0].set_xlabel("Year", fontsize=11, fontname="Arial")
+axes[1, 1].set_xlabel("Year", fontsize=11, fontname="Arial")
+axes[0, 0].set_ylabel("Number of Malaria Cases", fontsize=11, fontname="Arial")
+axes[1, 0].set_ylabel("Number of Malaria Cases", fontsize=11, fontname="Arial")
+
+plt.suptitle(
+    "Observed vs. Predicted Malaria Cases Across 4 GLM Models (2000–2022)",
+    fontsize=13,
+    fontweight="bold",
+    fontname="Arial"
+)
+
+plt.tight_layout()
+plt.savefig("Graph4_4Models_Observed_vs_Predicted.png", dpi=300)
+plt.show()
+
+# ------------------------------------------------------------
+# GRAPH 5: SINGLE OVERLAY COMPARISON OF ALL 4 MODELS
+# ------------------------------------------------------------
+plt.figure(figsize=(10, 5))
+
+plt.plot(bd_clean["Year"], bd_clean["malaria_cases"], marker="o", linewidth=2.6, color="#1f77b4", label="Observed Malaria Cases")
+plt.plot(bd_clean["Year"], bd_clean["Pred_Pois_No"], linestyle=":", linewidth=1.8, color="#ff7f0e", label="Poisson (Without Offset)")
+plt.plot(bd_clean["Year"], bd_clean["Pred_Pois_Off"], linestyle="-.", linewidth=1.8, color="#9467bd", label="Poisson (With Offset)")
+plt.plot(bd_clean["Year"], bd_clean["Pred_NB_No"], linestyle="--", linewidth=2, color="#d62728", label="Negative Binomial (Without Offset)")
+plt.plot(bd_clean["Year"], bd_clean["Pred_NB_Off"], marker="s", linestyle="-", linewidth=2.2, color="#2ca02c", label="Negative Binomial (With Offset)")
+
+plt.title("Observed vs. Predicted Malaria Cases Across GLMs (2000–2022)", fontsize=12, fontweight="bold", fontname="Arial")
+plt.xlabel("Year", fontsize=11, fontname="Arial")
+plt.ylabel("Number of Malaria Cases", fontsize=11, fontname="Arial")
+plt.legend(fontsize=9.5)
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("Graph5_All_Models_Overlay.png", dpi=300)
+plt.show()
+
+
+
+
+
+
+
+# ============================================================
+# GENERATE CARD-STYLE METHODS & MATERIALS FLOWCHART (ARIAL FONT + BEST MODEL)
+# ============================================================
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+# Set Arial font globally
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["font.sans-serif"] = ["Arial"]
+
+fig, ax = plt.subplots(figsize=(10.5, 7.6), dpi=300)
+ax.set_xlim(0, 10.5)
+ax.set_ylim(0, 7.8)
+ax.axis("off")
+
+def draw_round_box(x, y, w, h, text="", bg="#ffffff", fg="#111111",
+                   ec="none", lw=1.0, fs=9.5, fw="bold", r=0.12, shadow=False):
+    if shadow:
+        sh = patches.FancyBboxPatch(
+            (x + 0.03, y - 0.04), w, h,
+            boxstyle=f"round,pad=0.02,rounding_size={r}",
+            facecolor="#d0d4dc", edgecolor="none", zorder=1
+        )
+        ax.add_patch(sh)
+    box = patches.FancyBboxPatch(
+        (x, y), w, h,
+        boxstyle=f"round,pad=0.02,rounding_size={r}",
+        facecolor=bg, edgecolor=ec, linewidth=lw, zorder=2
+    )
+    ax.add_patch(box)
+    if text:
+        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center",
+                color=fg, fontsize=fs, fontweight=fw, fontfamily="Arial",
+                linespacing=1.25, zorder=3)
+
+def draw_down_arrow(x, y_top, y_bot):
+    ax.annotate("", xy=(x, y_bot), xytext=(x, y_top),
+                arrowprops=dict(arrowstyle="-|>,head_length=0.45,head_width=0.32",
+                                color="#111111", lw=2.0), zorder=4)
+
+
+
+# ------------------------------------------------------------
+# STEP 1: DATA COLLECTION
+# ------------------------------------------------------------
+draw_round_box(0.6, 6.02, 9.3, 0.88, "", bg="#f4f5f7", ec="#b8bec8", lw=1.1, r=0.14, shadow=True)
+draw_round_box(0.85, 6.73, 8.8, 0.28, "DATA COLLECTION", bg="#0b2d52", fg="white", fs=9.5, r=0.08)
+
+draw_round_box(0.85, 6.14, 2.8, 0.48, "Bangladesh dataset\n(2000–2022, N = 23)", bg="#3d6b2c", fg="white", fs=8.8)
+draw_round_box(3.85, 6.14, 2.8, 0.48, "22 candidate\nvariables (y1–y22)", bg="#0f3863", fg="white", fs=8.8)
+draw_round_box(6.85, 6.14, 2.8, 0.48, "Sources:\nWHO • World Bank • UNICEF", bg="#a67c14", fg="white", fs=8.5)
+
+draw_down_arrow(5.25, 6.00, 5.76)
+
+# ------------------------------------------------------------
+# STEP 2: DATA CLEANING
+# ------------------------------------------------------------
+draw_round_box(0.6, 4.82, 9.3, 0.88, "", bg="#f4f5f7", ec="#b8bec8", lw=1.1, r=0.14, shadow=True)
+draw_round_box(0.85, 5.53, 8.8, 0.28, "DATA CLEANING", bg="#0b2d52", fg="white", fs=9.5, r=0.08)
+
+draw_round_box(0.85, 4.94, 2.8, 0.48, "Removed constant\ncolumns: y20–y22", bg="#8c3b13", fg="white", fs=8.8)
+draw_round_box(3.85, 4.94, 2.8, 0.48, "Removed duplicate\ncolumns: y4, y11, y13", bg="#3d6b2c", fg="white", fs=8.8)
+draw_round_box(6.85, 4.94, 2.8, 0.48, "Removed reporting-artifact\nzero columns: y1, y2, y10, y18", bg="#0f3863", fg="white", fs=8.4)
+
+draw_down_arrow(5.25, 4.80, 4.56)
+
+# ------------------------------------------------------------
+# STEP 3: DIAGNOSTICS
+# ------------------------------------------------------------
+draw_round_box(0.6, 3.66, 9.3, 0.84, "", bg="#f4f5f7", ec="#b8bec8", lw=1.1, r=0.14, shadow=True)
+draw_round_box(0.85, 4.33, 8.8, 0.28, "DIAGNOSTICS", bg="#0b2d52", fg="white", fs=9.5, r=0.08)
+
+draw_round_box(0.85, 3.78, 4.25, 0.45, "Overdispersion confirmed\n(Variance / Mean = 23,041.68)", bg="#3d6b2c", fg="white", fs=8.8)
+draw_round_box(5.40, 3.78, 4.25, 0.45, "Multicollinearity screened\n(VIF < 5)", bg="#8c3b13", fg="white", fs=8.8)
+
+draw_down_arrow(5.25, 3.64, 3.40)
+
+# ------------------------------------------------------------
+# STEP 4: GLM MODEL FITTING
+# ------------------------------------------------------------
+draw_round_box(0.6, 2.28, 9.3, 1.06, "", bg="#f4f5f7", ec="#b8bec8", lw=1.1, r=0.14, shadow=True)
+draw_round_box(0.85, 3.17, 8.8, 0.28, "GLM MODEL FITTING", bg="#0b2d52", fg="white", fs=9.5, r=0.08)
+
+draw_round_box(0.85, 2.68, 2.08, 0.40, "Poisson GLM –\nWithout Offset", bg="white", fg="#111111", ec="#a8b0bc", lw=1.0, fs=8.2, r=0.08)
+draw_round_box(3.09, 2.68, 2.08, 0.40, "Poisson GLM –\nWith Population Offset", bg="white", fg="#111111", ec="#a8b0bc", lw=1.0, fs=8.2, r=0.08)
+draw_round_box(5.33, 2.68, 2.08, 0.40, "Negative Binomial GLM –\nWithout Offset", bg="white", fg="#111111", ec="#a8b0bc", lw=1.0, fs=8.0, r=0.08)
+draw_round_box(7.57, 2.68, 2.08, 0.40, "Negative Binomial GLM –\nWith Population Offset", bg="white", fg="#111111", ec="#a8b0bc", lw=1.0, fs=8.0, r=0.08)
+
+draw_round_box(0.85, 2.36, 8.8, 0.24, "Population offset = log(y7)   |   AIC-refined predictors: y5, y15",
+               bg="#d6e2f2", fg="#0b2d52", fs=8.5, r=0.06)
+
+draw_down_arrow(5.25, 2.26, 2.04)
+
+# ------------------------------------------------------------
+# STEP 5: MODEL EVALUATION
+# ------------------------------------------------------------
+draw_round_box(0.6, 1.48, 9.3, 0.50, "", bg="#f4f5f7", ec="#b8bec8", lw=1.1, r=0.14, shadow=True)
+draw_round_box(0.85, 1.83, 8.8, 0.26, "MODEL EVALUATION", bg="#0b2d52", fg="white", fs=9.2, r=0.08)
+ax.text(5.25, 1.64, "Compared using AIC  •  BIC  •  Log-Likelihood  •  Pearson χ² / df",
+        ha="center", va="center", color="#111111", fontsize=9.2, fontweight="bold", fontfamily="Arial", zorder=3)
+
+draw_down_arrow(5.25, 1.46, 1.24)
+
+# ------------------------------------------------------------
+# STEP 6: BEST MODEL SELECTED
+# ------------------------------------------------------------
+draw_round_box(0.6, 0.72, 9.3, 0.48, "", bg="#fdf2f2", ec="#c97a7a", lw=1.2, r=0.14, shadow=True)
+draw_round_box(0.85, 1.05, 8.8, 0.25, "BEST MODEL SELECTED", bg="#8b1a1a", fg="white", fs=9.2, r=0.08)
+ax.text(5.25, 0.87, "Refined Negative Binomial GLM with Population Offset  (AIC = 525.82)",
+        ha="center", va="center", color="#8b1a1a", fontsize=9.5, fontweight="bold", fontfamily="Arial", zorder=3)
+
+draw_down_arrow(5.25, 0.70, 0.50)
+
+# ------------------------------------------------------------
+# STEP 7: INTERPRETATION & FORECASTING
+# ------------------------------------------------------------
+draw_round_box(0.6, 0.04, 9.3, 0.44, "", bg="#f4f5f7", ec="#b8bec8", lw=1.1, r=0.14, shadow=True)
+draw_round_box(0.85, 0.34, 8.8, 0.25, "INTERPRETATION & FORECASTING", bg="#0b2d52", fg="white", fs=9.0, r=0.08)
+ax.text(5.25, 0.17, "Incidence Rate Ratio (IRR) = exp(β)   •   Short-Term Forecast (2023–2026)",
+        ha="center", va="center", color="#111111", fontsize=9.0, fontweight="bold", fontfamily="Arial", zorder=3)
+
+plt.tight_layout()
+plt.savefig("Methods_and_Materials_Card_Style.png", dpi=300, bbox_inches="tight", facecolor="white")
+plt.show()
+
+
+
+
+
+
+# ============================================================
+# GENERATE HIGH-RESOLUTION POSTER TABLES (100% ARIAL FONT, 300 DPI)
+# ============================================================
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+
+# Force Arial globally across Matplotlib
+mpl.rcParams["font.family"] = "sans-serif"
+mpl.rcParams["font.sans-serif"] = ["Arial"]
+mpl.rcParams["axes.unicode_minus"] = False
+
+def render_poster_table(headers, rows, col_widths, filename, highlight_row=None, figsize=(10.5, 3.2)):
+    fig, ax = plt.subplots(figsize=figsize, dpi=300)
+    ax.axis("off")
+
+    table = ax.table(
+        cellText=rows,
+        colLabels=headers,
+        colWidths=col_widths,
+        loc="center",
+        cellLoc="center"
+    )
+
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 2.15)
+
+    for (row, col), cell in table.get_celld().items():
+        cell.set_edgecolor("#cbd2dc")
+        cell.set_linewidth(0.8)
+        txt = cell.get_text()
+        txt.set_fontname("Arial")
+
+        # Left-align first column (text labels)
+        if col == 0:
+            txt.set_ha("left")
+            cell.PAD = 0.04
+
+        # Header styling
+        if row == 0:
+            cell.set_facecolor("#0b2d52")
+            txt.set_color("white")
+            txt.set_weight("bold")
+            txt.set_fontsize(10.5)
+        else:
+            # Highlight best/significant row
+            if highlight_row is not None and row == highlight_row:
+                cell.set_facecolor("#e6f0fa")
+                txt.set_weight("bold")
+                txt.set_color("#0b2d52")
+            else:
+                cell.set_facecolor("#ffffff" if row % 2 == 1 else "#f4f6f9")
+                txt.set_color("#111111")
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.show()
+
+# ------------------------------------------------------------
+# TABLE 1: Goodness-of-Fit Comparison Across Competing GLMs
+# ------------------------------------------------------------
+t1_headers = ["GLM Specification", "Log-Likelihood", "AIC", "BIC", "Pearson χ² / df"]
+t1_rows = [
+    ["Poisson GLM (No Offset)", "-99,694.55", "199,401.09", "199,407.91", "11,430.19"],
+    ["Poisson GLM (Population Offset)", "-111,802.05", "223,616.10", "223,622.91", "12,954.89"],
+    ["Negative Binomial GLM (5 Predictors, Offset)", "-265.16", "544.32", "552.27", "1.00"],
+    ["Negative Binomial GLM (Refined, Offset)", "-258.91", "525.82", "530.36", "1.00"]
+]
+t1_widths = [0.40, 0.16, 0.14, 0.14, 0.16]
+
+render_poster_table(
+    headers=t1_headers,
+    rows=t1_rows,
+    col_widths=t1_widths,
+    filename="Poster_Table1_GOF.png",
+    highlight_row=4,
+    figsize=(10.5, 3.0)
+)
+
+# ------------------------------------------------------------
+# TABLE 2: Parameter Estimates & Incidence Rate Ratios (Refined NB GLM)
+# ------------------------------------------------------------
+t2_headers = ["Predictor", "Estimate (β)", "Std. Error", "z-stat", "p-value", "IRR = exp(β)", "95% CI for IRR"]
+t2_rows = [
+    ["Intercept", "-5.8438", "0.8555", "-6.83", "< 0.001", "0.0029", "(0.001, 0.016)"],
+    ["Basic Sanitation Access (y15)", "-0.0666", "0.0093", "-7.20", "< 0.001", "0.9356", "(0.919, 0.953)"],
+    ["Govt. Health Expenditure (y5)", "0.1600", "0.1467", "1.09", "0.275", "1.1735", "(0.881, 1.564)"]
+]
+t2_widths = [0.29, 0.12, 0.11, 0.10, 0.10, 0.13, 0.15]
+
+render_poster_table(
+    headers=t2_headers,
+    rows=t2_rows,
+    col_widths=t2_widths,
+    filename="Poster_Table2_IRR.png",
+    highlight_row=2,
+    figsize=(11.0, 2.5)
+)
+
