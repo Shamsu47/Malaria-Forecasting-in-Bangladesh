@@ -1,0 +1,434 @@
+# ============================================================
+# STEP 1: IMPORT LIBRARIES & LOAD RAW DATA
+# ============================================================
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import warnings
+
+warnings.filterwarnings("ignore")
+
+# Change this path to the location of your Excel file
+file_path = r"D:\STAT 3103\Malaria_Global data.xlsx"
+df = pd.read_excel(file_path, sheet_name="data")
+variable_info = pd.read_excel(file_path, sheet_name="variable", header=2)
+
+# Keep Bangladesh and sort by year
+bd = df[df["Country"].astype(str).str.strip().str.lower() == "bangladesh"].copy()
+bd = bd.sort_values("Year").reset_index(drop=True)
+
+print("Bangladesh dataset shape:", bd.shape)
+print("Year range:", bd["Year"].min(), "-", bd["Year"].max())
+display(bd.head())
+
+
+
+
+# ============================================================
+# STEP 2: DATA QUALITY CHECK
+# ============================================================
+bd.columns = bd.columns.str.strip()
+
+# Convert relevant columns to numeric where possible
+for col in bd.columns:
+    if col not in ["Country"]:
+        bd[col] = pd.to_numeric(bd[col], errors="ignore")
+
+print("Missing values by column:")
+display(bd.isnull().sum().to_frame("Missing values"))
+
+print("Duplicate rows:", bd.duplicated().sum())
+display(bd[["Malaria cases"] + [f"y{i}" for i in range(1, 23) if f"y{i}" in bd.columns]].describe().T.round(2))
+
+
+
+
+# ============================================================
+# STEP 3: CHECK OVERDISPERSION
+# ============================================================
+response = "Malaria cases"
+mean_cases = bd[response].mean()
+var_cases = bd[response].var()
+disp_ratio = var_cases / mean_cases
+
+print(f"Mean malaria cases: {mean_cases:,.2f}")
+print(f"Variance: {var_cases:,.2f}")
+print(f"Variance-to-mean ratio: {disp_ratio:,.2f}")
+
+if disp_ratio > 1:
+    print("The variance is larger than the mean. This suggests overdispersion,")
+    print("so a Negative Binomial model is worth comparing with Poisson.")
+else:
+    print("There is no clear evidence of overdispersion from this simple check.")
+
+
+
+
+# ============================================================
+# STEP 4: REMOVE EXACT DUPLICATE COLUMNS
+# ============================================================
+# Only exact duplicate columns are removed automatically.
+duplicate_pairs = []
+cols = bd.columns.tolist()
+
+for i in range(len(cols)):
+    for j in range(i + 1, len(cols)):
+        if bd[cols[i]].equals(bd[cols[j]]):
+            duplicate_pairs.append((cols[i], cols[j]))
+
+print("Exact duplicate column pairs:", duplicate_pairs)
+
+bd = bd.loc[:, ~bd.T.duplicated()].copy()
+print("Shape after removing exact duplicate columns:", bd.shape)
+
+
+
+
+
+# ============================================================
+# STEP 5: CHECK PREDICTORS BEFORE MODEL FITTING
+# ============================================================
+# Do not remove a variable only because it contains zero values:
+# zero can be a valid observation. Check constant columns and data quality.
+y_cols = [c for c in bd.columns if c.startswith("y")]
+
+predictor_check = pd.DataFrame({
+    "Variable": y_cols,
+    "Missing": [bd[c].isna().sum() for c in y_cols],
+    "Zero_Count": [(bd[c] == 0).sum() for c in y_cols],
+    "Unique_Values": [bd[c].nunique(dropna=True) for c in y_cols],
+    "Minimum": [bd[c].min() for c in y_cols],
+    "Maximum": [bd[c].max() for c in y_cols]
+})
+display(predictor_check)
+
+# Remove only constant predictors automatically.
+constant_cols = [c for c in y_cols if bd[c].nunique(dropna=True) <= 1]
+print("Constant predictors removed:", constant_cols)
+bd_clean = bd.drop(columns=constant_cols).copy()
+
+# Response and population must be valid for the models below.
+bd_clean["malaria_cases"] = pd.to_numeric(bd_clean["Malaria cases"], errors="coerce")
+bd_clean["population"] = pd.to_numeric(bd_clean["y7"], errors="coerce")
+
+bd_clean = bd_clean[
+    bd_clean["malaria_cases"].notna()
+    & (bd_clean["malaria_cases"] >= 0)
+    & bd_clean["population"].notna()
+    & (bd_clean["population"] > 0)
+].copy()
+
+bd_clean["log_pop"] = np.log(bd_clean["population"])
+print("Rows available for modelling:", len(bd_clean))
+
+
+
+
+
+
+# ============================================================
+# STEP 7: FIT POISSON AND NEGATIVE BINOMIAL GLMs
+# ============================================================
+# In statsmodels GLM, NegativeBinomial(alpha=...) uses a specified alpha.
+# Here alpha=1 is used as a simple starting value for the course GLM analysis.
+# This is NOT an estimated alpha. State this clearly in the report.
+NB_ALPHA = 1.0
+
+selected_vars = ["y3", "y5", "y8", "y17", "y19"]
+selected_vars = [v for v in selected_vars if v in bd_clean.columns]
+formula = "malaria_cases ~ " + " + ".join(selected_vars)
+print("Initial model formula:", formula)
+
+# Poisson GLM without offset
+pois_no_offset = smf.glm(
+    formula=formula, data=bd_clean,
+    family=sm.families.Poisson()
+).fit()
+
+# Poisson GLM with population offset
+pois_with_offset = smf.glm(
+    formula=formula, data=bd_clean,
+    family=sm.families.Poisson(),
+    offset=bd_clean["log_pop"]
+).fit()
+
+# Negative Binomial GLM without offset
+nb_no_offset = smf.glm(
+    formula=formula, data=bd_clean,
+    family=sm.families.NegativeBinomial(alpha=NB_ALPHA)
+).fit()
+
+# Negative Binomial GLM with population offset
+nb_with_offset = smf.glm(
+    formula=formula, data=bd_clean,
+    family=sm.families.NegativeBinomial(alpha=NB_ALPHA),
+    offset=bd_clean["log_pop"]
+).fit()
+
+print("\nPOISSON GLM WITH OFFSET")
+print(pois_with_offset.summary())
+print("\nNEGATIVE BINOMIAL GLM WITH OFFSET")
+print(nb_with_offset.summary())
+
+
+
+
+
+# ============================================================
+# STEP 8: MODEL COMPARISON, IRR AND FITTED VALUES
+# ============================================================
+def pearson_dispersion(model):
+    return model.pearson_chi2 / model.df_resid
+
+comparison = pd.DataFrame({
+    "Model": [
+        "Poisson GLM (no offset)",
+        "Poisson GLM (population offset)",
+        "Negative Binomial GLM (no offset)",
+        "Negative Binomial GLM (population offset)"
+    ],
+    "Log-Likelihood": [
+        pois_no_offset.llf, pois_with_offset.llf,
+        nb_no_offset.llf, nb_with_offset.llf
+    ],
+    "AIC": [
+        pois_no_offset.aic, pois_with_offset.aic,
+        nb_no_offset.aic, nb_with_offset.aic
+    ],
+    "Pearson Chi-square / df": [
+        pearson_dispersion(pois_no_offset),
+        pearson_dispersion(pois_with_offset),
+        pearson_dispersion(nb_no_offset),
+        pearson_dispersion(nb_with_offset)
+    ]
+})
+display(comparison.round(3))
+
+# For the course project, use the Negative Binomial GLM with offset
+# as the candidate final model, then interpret its coefficients.
+best_model = nb_with_offset
+conf = best_model.conf_int()
+irr_table = pd.DataFrame({
+    "Coefficient": best_model.params,
+    "Std. Error": best_model.bse,
+    "p-value": best_model.pvalues,
+    "IRR": np.exp(best_model.params),
+    "IRR 95% CI Lower": np.exp(conf[0]),
+    "IRR 95% CI Upper": np.exp(conf[1])
+})
+display(irr_table.round(4))
+
+# Fitted values
+bd_clean["Fitted_NB_WithOffset"] = best_model.predict(
+    bd_clean, offset=bd_clean["log_pop"]
+)
+
+plt.figure(figsize=(10, 5))
+plt.plot(bd_clean["Year"], bd_clean["malaria_cases"], marker="o", label="Observed")
+plt.plot(bd_clean["Year"], bd_clean["Fitted_NB_WithOffset"], marker="s", linestyle="--", label="Negative Binomial GLM fitted")
+plt.title("Observed vs Fitted Malaria Cases in Bangladesh")
+plt.xlabel("Year")
+plt.ylabel("Malaria cases")
+plt.legend()
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+
+# ============================================================
+# STEP 9: REFINED TWO-PREDICTOR NEGATIVE BINOMIAL GLM
+# ============================================================
+# This is a simpler candidate model using y5 and y15.
+# Confirm the variable names/definitions from the supplied variable sheet.
+final_vars = ["y5", "y15"]
+missing_vars = [v for v in final_vars if v not in bd_clean.columns]
+if missing_vars:
+    raise ValueError(f"These predictors are missing from the dataset: {missing_vars}")
+
+formula_final = "malaria_cases ~ y5 + y15"
+
+nb_final = smf.glm(
+    formula=formula_final,
+    data=bd_clean,
+    family=sm.families.NegativeBinomial(alpha=NB_ALPHA),
+    offset=bd_clean["log_pop"]
+).fit()
+
+print("Final candidate model:", formula_final)
+print(nb_final.summary())
+print(f"Final candidate AIC: {nb_final.aic:.3f}")
+print("Note: alpha is fixed at 1.0 in this GLM specification.")
+
+
+
+
+
+
+
+# ============================================================
+# STEP 10: CHECK VIF AND COMPARE THE TWO NB GLM CANDIDATES
+# ============================================================
+X_final = sm.add_constant(bd_clean[final_vars].astype(float))
+vif_final = pd.DataFrame({
+    "Variable": X_final.columns,
+    "VIF": [variance_inflation_factor(X_final.values, i) for i in range(X_final.shape[1])]
+})
+display(vif_final[vif_final["Variable"] != "const"].round(3))
+
+model_comparison = pd.DataFrame({
+    "Model": ["Initial 5-predictor NB GLM with offset", "Final 2-predictor NB GLM with offset"],
+    "AIC": [nb_with_offset.aic, nb_final.aic],
+    "BIC": [nb_with_offset.bic_llf, nb_final.bic_llf],
+    "Pearson Chi-square / df": [pearson_dispersion(nb_with_offset), pearson_dispersion(nb_final)]
+})
+display(model_comparison.round(3))
+
+print("A lower AIC indicates a better balance of fit and model complexity")
+print("among the models being compared. Also consider residual diagnostics and subject knowledge.")
+
+
+
+
+
+
+
+
+# ============================================================
+# STEP 11: OBSERVED VS FITTED GRAPH FOR FINAL CANDIDATE MODEL
+# ============================================================
+bd_clean["Fitted_Final"] = nb_final.predict(
+    bd_clean, offset=bd_clean["log_pop"]
+)
+
+plt.figure(figsize=(8, 4.5))
+plt.plot(bd_clean["Year"], bd_clean["malaria_cases"], marker="o", label="Observed malaria cases")
+plt.plot(bd_clean["Year"], bd_clean["Fitted_Final"], marker="s", linestyle="--", label="Negative Binomial GLM fitted")
+plt.title("Observed vs Fitted Malaria Cases in Bangladesh")
+plt.xlabel("Year")
+plt.ylabel("Malaria cases")
+plt.legend()
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("Graph1_Observed_vs_Fitted.png", dpi=300)
+plt.show()
+
+
+
+
+
+
+
+
+# ============================================================
+# STEP 12: INCIDENCE RATE RATIO (IRR) GRAPH
+# ============================================================
+irr_values = np.exp(nb_final.params[final_vars])
+labels = ["y5", "y15"]
+
+plt.figure(figsize=(7, 4))
+bars = plt.bar(labels, irr_values, width=0.5, edgecolor="black")
+plt.axhline(1.0, linestyle="--", linewidth=1.3, label="IRR = 1")
+for bar, val in zip(bars, irr_values):
+    y_pos = val + 0.02 if val >= 0 else val - 0.02
+    plt.text(bar.get_x() + bar.get_width()/2, y_pos, f"{val:.3f}", ha="center", va="bottom", fontsize=10)
+
+plt.title("Incidence Rate Ratios from Final Negative Binomial GLM")
+plt.ylabel("Incidence Rate Ratio")
+plt.legend()
+plt.grid(axis="y", alpha=0.3)
+plt.tight_layout()
+plt.savefig("Graph2_IRR_Chart.png", dpi=300)
+plt.show()
+
+
+
+
+
+
+
+# ============================================================
+# STEP 13: FORECAST FUTURE MALARIA CASES (NEXT 5 YEARS)
+# ============================================================
+forecast_horizon = 5
+
+# Use the latest observed year and latest available predictor values
+last_year = int(bd_clean["Year"].max())
+future_years = np.arange(last_year + 1, last_year + forecast_horizon + 1)
+
+# Assumption 1: y5 and y15 remain at their latest observed values
+future_data = pd.DataFrame({
+    "Year": future_years,
+    "y5": [bd_clean["y5"].iloc[-1]] * forecast_horizon,
+    "y15": [bd_clean["y15"].iloc[-1]] * forecast_horizon
+})
+
+# Assumption 2: project population using a linear trend in log(population)
+pop_trend = np.polyfit(
+    bd_clean["Year"].astype(float),
+    np.log(bd_clean["population"].astype(float)),
+    deg=1
+)
+future_data["population"] = np.exp(
+    np.polyval(pop_trend, future_data["Year"].astype(float))
+)
+future_data["log_pop"] = np.log(future_data["population"])
+
+# Predict expected malaria cases from the final Negative Binomial GLM
+forecast_prediction = nb_final.get_prediction(
+    future_data,
+    offset=future_data["log_pop"]
+).summary_frame()
+
+future_data["Forecast_Malaria_Cases"] = forecast_prediction["mean"].clip(lower=0)
+future_data["Mean_CI_Lower"] = forecast_prediction["mean_ci_lower"].clip(lower=0)
+future_data["Mean_CI_Upper"] = forecast_prediction["mean_ci_upper"].clip(lower=0)
+
+forecast_table = future_data[
+    ["Year", "population", "y5", "y15",
+     "Forecast_Malaria_Cases", "Mean_CI_Lower", "Mean_CI_Upper"]
+].copy()
+
+forecast_table["population"] = forecast_table["population"].round(0).astype(int)
+for col in ["Forecast_Malaria_Cases", "Mean_CI_Lower", "Mean_CI_Upper"]:
+    forecast_table[col] = forecast_table[col].round(0).astype(int)
+
+print("Five-year scenario-based forecast:")
+display(forecast_table)
+
+# Plot historical observed cases and future forecast
+plt.figure(figsize=(10, 5))
+plt.plot(
+    bd_clean["Year"], bd_clean["malaria_cases"],
+    marker="o", label="Observed cases"
+)
+plt.plot(
+    future_data["Year"], future_data["Forecast_Malaria_Cases"],
+    marker="s", linestyle="--", label="Forecast cases"
+)
+plt.fill_between(
+    future_data["Year"],
+    future_data["Mean_CI_Lower"],
+    future_data["Mean_CI_Upper"],
+    alpha=0.2, label="95% CI for expected mean"
+)
+plt.axvline(last_year, linestyle=":", linewidth=1)
+plt.title("Scenario-Based Forecast of Malaria Cases in Bangladesh")
+plt.xlabel("Year")
+plt.ylabel("Malaria cases")
+plt.legend()
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("Graph3_Malaria_Forecast.png", dpi=300)
+plt.show()
+
+print(
+    "Important: y5 and y15 were held constant at their latest observed values. "
+    "The forecast depends on this assumption and the projected population trend."
+)
